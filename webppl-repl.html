@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Multi-agent models</title>
+  <link rel="stylesheet" href="http://yui.yahooapis.com/pure/0.6.0/pure-min.css">
+  <link rel='stylesheet' id='syntax-merriweather-css'  href='https://fonts.googleapis.com/css?family=Merriweather%3A400%2C300italic%2C300%2C400italic%2C700%2C700italic&#038;subset=latin%2Clatin-ext&#038;ver=4.4-alpha-34640' type='text/css' media='all' />
+  <link rel="stylesheet" href="/assets/css/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.5.1/katex.min.css">
+  <link rel="canonical" href="http://agentmodels.org/chapters/7-multi-agent.html">
+  <script src="https://code.jquery.com/jquery-2.1.4.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.5.1/katex.min.js"></script>
+  <script src="/assets/js/parse-bibtex.js"></script>
+  <script src="/assets/js/main.js"></script>
+
+  <script src="http://cdn.webppl.org/webppl-editor-1.0.0.js"></script>
+  <link rel="stylesheet" href="http://cdn.webppl.org/webppl-editor-1.0.0.css">  
+
+  <script src="http://cdn.webppl.org/webppl-viz-0.7.4.js"></script>
+  <link rel="stylesheet" href="http://cdn.webppl.org/webppl-viz-0.7.4.css">
+  
+  <script src="/assets/js/webppl.min.js" defer async></script>
+</head>
+
+
+  <body>
+
+    <header class="site-header">
+  <a class="site-title" href="/">Modeling Agents with Probabilistic Programs</a>
+</header>
+
+
+    <div class="page-content-wrapper">
+      <div class="page-content">
+        <h1 class="chapter-title">Multi-agent models</h1>
+
+<p>In this chapter, we will look at models that involve multiple agents reasoning about each other.
+This chapter is based on reft:stuhlmueller2013reasoning.</p>
+
+<h2 id="schelling-coordination-games">Schelling coordination games</h2>
+
+<p>We start with a simple Schelling coordination game: Alice and Bob are trying to meet up at one of two bars and have to decide between the popular one and the unpopular one.</p>
+
+<p>Let’s first consider only Alice:</p>
+
+<div class="highlighter-rouge"><pre class="highlight"><code>var locationPrior = function() {
+  if (flip(.55)) {
+    return 'popular-bar';
+  } else {
+    return 'unpopular-bar';
+  }
+};
+
+var alice = function() {
+  return Infer({ method: 'enumerate' }, function(){
+    var myLocation = locationPrior();
+    return myLocation;
+  })
+};
+
+viz.auto(alice());
+</code></pre>
+</div>
+
+<p>Now we model Alice’s thinking about Bob:</p>
+
+<div class="highlighter-rouge"><pre class="highlight"><code>var locationPrior = function() {
+  if (flip(.55)) {
+    return 'popular-bar';
+  } else {
+    return 'unpopular-bar';
+  }
+};
+
+var alice = function() {
+  return Infer({ method: 'enumerate' }, function(){
+    var myLocation = locationPrior();
+    var bobLocation = sample(bob());
+    condition(myLocation === bobLocation);
+    return myLocation;
+  });
+};
+
+var bob = function() {
+  return Infer({ method: 'enumerate' }, function(){
+    var myLocation = locationPrior();
+    return myLocation;
+  });
+};
+
+viz.auto(alice());
+</code></pre>
+</div>
+
+<p>Now Bob and Alice are thinking recursively about each other. We add caching (to avoid repeated computations) and a depth parameter (to avoid infinite recursion):</p>
+
+<div class="highlighter-rouge"><pre class="highlight"><code>var locationPrior = function() {
+  if (flip(.55)) {
+    return 'popular-bar';
+  } else {
+    return 'unpopular-bar';
+  }
+}
+
+var alice = dp.cache(function(depth) {
+  return Infer({ method: 'enumerate' }, function(){
+    var myLocation = locationPrior();
+    var bobLocation = sample(bob(depth - 1));
+    condition(myLocation === bobLocation);
+    return myLocation;
+  });
+});
+
+var bob = dp.cache(function(depth) {
+  return Infer({ method: 'enumerate' }, function(){
+    var myLocation = locationPrior();
+    if (depth === 0) {
+      return myLocation;
+    } else {
+      var aliceLocation = sample(alice(depth));
+      condition(myLocation === aliceLocation);
+      return myLocation;
+    }
+  });
+});
+
+viz.auto(alice(10))
+</code></pre>
+</div>
+
+<blockquote>
+  <p><strong>Exercise</strong>: Change the example to the setting where Bob wants to avoid Alice instead of trying to meet up with her, and Alice knows this. How do the predictions change as the reasoning depth grows? How would you model the setting where Alice doesn’t know that Bob wants to avoid her?</p>
+</blockquote>
+
+<blockquote>
+  <p><strong>Exercise</strong>: Would any of the answers to the previous exercise change if recursive reasoning could terminate not just at a fixed depth, but also at random?</p>
+</blockquote>
+
+<h2 id="game-playing">Game playing</h2>
+
+<p>We’ll look at the two-player game tic-tac-toe <sup id="fnref:tictactoeimg"><a href="#fn:tictactoeimg" class="footnote">1</a></sup>:</p>
+
+<p><img src="/assets/img/tic-tac-toe-game-1.svg" /></p>
+
+<p>Let’s start with a prior on moves:</p>
+
+<div class="highlighter-rouge"><pre class="highlight"><code>var isValidMove = function(state, move) {
+  return state[move.x][move.y] === '?';
+};
+
+var movePrior = dp.cache(function(state){
+  return Infer({ method: 'enumerate' }, function(){
+    var move = {
+      x: randomInteger(3),
+      y: randomInteger(3)
+    };
+    condition(isValidMove(state, move));
+    return move;
+  });
+});
+
+var startState = [
+  ['?', 'o', '?'],
+  ['?', 'x', 'x'],
+  ['?', '?', '?']
+];
+
+viz.auto(movePrior(startState));
+</code></pre>
+</div>
+
+<p>Now let’s add a deterministic transition function:</p>
+
+<div class="highlighter-rouge"><pre class="highlight"><code>///fold: isValidMove, movePrior
+var isValidMove = function(state, move) {
+  return state[move.x][move.y] === '?';
+};
+
+var movePrior = dp.cache(function(state){
+  return Infer({ method: 'enumerate' }, function(){
+    var move = {
+      x: randomInteger(3),
+      y: randomInteger(3)
+    };
+    condition(isValidMove(state, move));
+    return move;
+  });
+});
+///
+
+var assign = function(obj, k, v) {
+  var newObj = _.clone(obj);
+  return Object.defineProperty(newObj, k, {value: v})
+};
+
+var transition = function(state, move, player) {
+  var newRow = assign(state[move.x], move.y, player);
+  return assign(state, move.x, newRow);
+};
+
+var startState = [
+  ['?', 'o', '?'],
+  ['?', 'x', 'x'],
+  ['?', '?', '?']
+];
+
+transition(startState, {x: 1, y: 0}, 'o')
+</code></pre>
+</div>
+
+<p>We need to be able to check if a player has won:</p>
+
+<div class="highlighter-rouge"><pre class="highlight"><code>///fold: movePrior, transition
+var isValidMove = function(state, move) {
+  return state[move.x][move.y] === '?';
+};
+
+var movePrior = dp.cache(function(state){
+  return Infer({ method: 'enumerate' }, function(){
+    var move = {
+      x: randomInteger(3),
+      y: randomInteger(3)
+    };
+    condition(isValidMove(state, move));
+    return move;
+  });
+});
+
+var assign = function(obj, k, v) {
+  var newObj = _.clone(obj);
+  return Object.defineProperty(newObj, k, {value: v})
+};
+
+var transition = function(state, move, player) {
+  var newRow = assign(state[move.x], move.y, player);
+  return assign(state, move.x, newRow);
+};
+///
+
+var diag1 = function(state) {
+  return mapIndexed(function(i, x) {return x[i];}, state);
+};
+
+var diag2 = function(state) {
+  var n = state.length;
+  return mapIndexed(function(i, x) {return x[n - (i + 1)];}, state);
+};
+
+var hasWon = dp.cache(function(state, player) {
+  var check = function(xs){
+    return _.countBy(xs)[player] == xs.length;
+  };
+  return any(check, [
+    state[0], state[1], state[2], // rows
+    map(first, state), map(second, state), map(third, state), // cols
+    diag1(state), diag2(state) // diagonals
+  ]);
+});
+
+var startState = [
+  ['?', 'o', '?'],
+  ['x', 'x', 'x'],
+  ['?', '?', '?']
+];
+
+hasWon(startState, 'x')
+</code></pre>
+</div>
+
+<p>Now let’s implement an agent that chooses a single action, but can’t plan ahead:</p>
+
+<div class="highlighter-rouge"><pre class="highlight"><code>///fold: movePrior, transition, hasWon
+var isValidMove = function(state, move) {
+  return state[move.x][move.y] === '?';
+};
+
+var movePrior = dp.cache(function(state){
+  return Infer({ method: 'enumerate' }, function(){
+    var move = {
+      x: randomInteger(3),
+      y: randomInteger(3)
+    };
+    condition(isValidMove(state, move));
+    return move;
+  });
+});
+
+var assign = function(obj, k, v) {
+  var newObj = _.clone(obj);
+  return Object.defineProperty(newObj, k, {value: v})
+};
+
+var transition = function(state, move, player) {
+  var newRow = assign(state[move.x], move.y, player);
+  return assign(state, move.x, newRow);
+};
+
+var diag1 = function(state) {
+  return mapIndexed(function(i, x) {return x[i];}, state);
+};
+
+var diag2 = function(state) {
+  var n = state.length;
+  return mapIndexed(function(i, x) {return x[n - (i + 1)];}, state);
+};
+
+var hasWon = dp.cache(function(state, player) {
+  var check = function(xs){
+    return _.countBy(xs)[player] == xs.length;
+  };
+  return any(check, [
+    state[0], state[1], state[2], // rows
+    map(first, state), map(second, state), map(third, state), // cols
+    diag1(state), diag2(state) // diagonals
+  ]);
+});
+///
+var isDraw = function(state) {
+  return !hasWon(state, 'x') &amp;&amp; !hasWon(state, 'o');
+};
+
+var utility = function(state, player) {
+  if (hasWon(state, player)) {
+    return 10;
+  } else if (isDraw(state)) {
+    return 0;
+  } else {
+    return -10;
+  }
+};
+
+var act = dp.cache(function(state, player) {
+  return Infer({ method: 'enumerate' }, function(){
+    var move = sample(movePrior(state));
+    var eu = expectation(Infer({ method: 'enumerate'}, function(){
+      var outcome = transition(state, move, player);
+      return utility(outcome, player);
+    }));
+    factor(eu);    
+    return move;
+  });
+});
+
+var startState = [
+  ['o', 'o', '?'],
+  ['?', 'x', 'x'],
+  ['?', '?', '?']
+];
+
+viz.auto(act(startState, 'x'));
+</code></pre>
+</div>
+
+<p>And now let’s include planning:</p>
+
+<div class="highlighter-rouge"><pre class="highlight"><code>///fold: movePrior, transition, hasWon, utility, isTerminal
+var isValidMove = function(state, move) {
+  return state[move.x][move.y] === '?';
+};
+
+var movePrior = dp.cache(function(state){
+  return Infer({ method: 'enumerate' }, function(){
+    var move = {
+      x: randomInteger(3),
+      y: randomInteger(3)
+    };
+    condition(isValidMove(state, move));
+    return move;
+  });
+});
+
+var assign = function(obj, k, v) {
+  var newObj = _.clone(obj);
+  return Object.defineProperty(newObj, k, {value: v})
+};
+
+var transition = function(state, move, player) {
+  var newRow = assign(state[move.x], move.y, player);
+  return assign(state, move.x, newRow);
+};
+
+var diag1 = function(state) {
+  return mapIndexed(function(i, x) {return x[i];}, state);
+};
+
+var diag2 = function(state) {
+  var n = state.length;
+  return mapIndexed(function(i, x) {return x[n - (i + 1)];}, state);
+};
+
+var hasWon = dp.cache(function(state, player) {
+  var check = function(xs){
+    return _.countBy(xs)[player] == xs.length;
+  };
+  return any(check, [
+    state[0], state[1], state[2], // rows
+    map(first, state), map(second, state), map(third, state), // cols
+    diag1(state), diag2(state) // diagonals
+  ]);
+});
+
+var isDraw = function(state) {
+  return !hasWon(state, 'x') &amp;&amp; !hasWon(state, 'o');
+};
+
+var utility = function(state, player) {
+  if (hasWon(state, player)) {
+    return 10;
+  } else if (isDraw(state)) {
+    return 0;
+  } else {
+    return -10;
+  }
+};
+
+var isComplete = function(state) {
+  return all(
+    function(x){
+      return x != '?';
+    },
+    _.flatten(state));
+}
+
+var isTerminal = function(state) {
+  return hasWon(state, 'x') || hasWon(state, 'o') || isComplete(state);  
+};
+///
+
+var otherPlayer = function(player) {
+  return (player === 'x') ? 'o' : 'x';
+};
+
+var act = dp.cache(function(state, player) {
+  return Infer({ method: 'enumerate' }, function(){
+    var move = sample(movePrior(state));
+    var eu = expectation(Infer({ method: 'enumerate'}, function(){
+      var outcome = simulate(state, move, player);
+      return utility(outcome, player);
+    }));
+    factor(eu);    
+    return move;
+  });
+});
+
+var simulate = function(state, action, player) {
+  var nextState = transition(state, action, player);
+  if (isTerminal(nextState)) {
+    return nextState;
+  } else {
+    var nextPlayer = otherPlayer(player);
+    var nextAction = sample(act(nextState, nextPlayer));
+    return simulate(nextState, nextAction, nextPlayer);
+  }
+};
+
+var startState = [
+  ['o', '?', '?'],
+  ['?', '?', 'x'],
+  ['?', '?', '?']
+];
+
+var actDist = act(startState, 'o');
+
+viz.auto(actDist);
+</code></pre>
+</div>
+
+<h2 id="language-understanding">Language understanding</h2>
+
+<p>A model of pragmatic language interpretation: The speaker chooses a sentence conditioned on the listener inferring the intended state of the world when hearing this sentence; the listener chooses an interpretation conditioned on the speaker selecting the given utterance when intending this meaning.</p>
+
+<p>Literal interpretation:</p>
+
+<div class="highlighter-rouge"><pre class="highlight"><code>var statePrior = function() {
+  return uniformDraw([0, 1, 2, 3]);
+};
+
+var literalMeanings = {
+  allSprouted: function(state) { return state === 3; },
+  someSprouted: function(state) { return state &gt; 0; },
+  noneSprouted: function(state) { return state === 0; }
+};
+
+var sentencePrior = function() {
+  return uniformDraw(['allSprouted', 'someSprouted', 'noneSprouted']);
+};
+
+var literalListener = function(sentence) {
+  return Infer({ method: 'enumerate' }, function(){
+    var state = statePrior();
+    var meaning = literalMeanings[sentence];
+    condition(meaning(state));
+    return state;
+  })
+};
+
+viz.auto(literalListener('someSprouted'));
+</code></pre>
+</div>
+
+<p>A pragmatic speaker, thinking about the literal listener:</p>
+
+<div class="highlighter-rouge"><pre class="highlight"><code>var alpha = 2;
+
+///fold: statePrior, literalMeanings, sentencePrior
+var statePrior = function() {
+  return uniformDraw([0, 1, 2, 3]);
+};
+
+var literalMeanings = {
+  allSprouted: function(state) { return state === 3; },
+  someSprouted: function(state) { return state &gt; 0; },
+  noneSprouted: function(state) { return state === 0; }
+};
+
+var sentencePrior = function() {
+  return uniformDraw(['allSprouted', 'someSprouted', 'noneSprouted']);
+};
+///
+
+var literalListener = function(sentence) {
+  return Infer({ method: 'enumerate' }, function(){
+    var state = statePrior();
+    var meaning = literalMeanings[sentence];
+    condition(meaning(state));
+    return state;
+  })
+};
+
+var speaker = function(state) {
+  return Infer({ method: 'enumerate' }, function(){
+    var sentence = sentencePrior();
+    factor(alpha * literalListener(sentence).score(state));
+    return sentence;
+  });
+}
+
+viz.auto(speaker(3));
+</code></pre>
+</div>
+
+<p>Pragmatic listener, thinking about speaker:</p>
+
+<div class="highlighter-rouge"><pre class="highlight"><code>var alpha = 2;
+
+///fold: statePrior, literalMeanings, sentencePrior
+var statePrior = function() {
+  return uniformDraw([0, 1, 2, 3]);
+};
+
+var literalMeanings = {
+  allSprouted: function(state) { return state === 3; },
+  someSprouted: function(state) { return state &gt; 0; },
+  noneSprouted: function(state) { return state === 0; }
+};
+
+var sentencePrior = function() {
+  return uniformDraw(['allSprouted', 'someSprouted', 'noneSprouted']);
+};
+///
+
+var literalListener = dp.cache(function(sentence) {
+  return Infer({ method: 'enumerate' }, function(){
+    var state = statePrior();
+    var meaning = literalMeanings[sentence];
+    condition(meaning(state));
+    return state;
+  })
+});
+
+var speaker = dp.cache(function(state) {
+  return Infer({ method: 'enumerate' }, function(){
+    var sentence = sentencePrior();
+    factor(alpha * literalListener(sentence).score(state));
+    return sentence;
+  });
+});
+
+var listener = dp.cache(function(sentence) {
+  return Infer({ method: 'enumerate' }, function(){
+    var state = statePrior();
+    factor(speaker(state).score(sentence));
+    return state;
+  })
+});
+
+viz.auto(listener('someSprouted'));
+</code></pre>
+</div>
+
+<p>Next chapter: <a href="/chapters/8-using-gridworld-library.html">How to use the WebPPL Agent Models library</a></p>
+
+<p><br /></p>
+
+<h3 id="footnotes">Footnotes</h3>
+<div class="footnotes">
+  <ol>
+    <li id="fn:tictactoeimg">
+      <p>Image source: <a href="https://en.wikipedia.org/wiki/Tic-tac-toe#/media/File:Tic-tac-toe-game-1.svg">Wikipedia</a> <a href="#fnref:tictactoeimg" class="reversefootnote">&#8617;</a></p>
+    </li>
+  </ol>
+</div>
+
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+  <a href="/">Table of Contents</a> | <a href="https://github.com/agentmodels/agentmodels.org" id="github-edit-link">Edit on Github</a>
+</footer>
+
+<script type="text/javascript">
+  $("#github-edit-link").attr("href", github_page_url("/chapters/7-multi-agent.html"))
+</script>
+
+
+  </body>
+
+</html>
